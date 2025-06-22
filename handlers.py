@@ -11,7 +11,6 @@ from base64_enc_dec import base64_encode, base64_decode
 router = Router()
 
 
-
 class StartState(StatesGroup):
     active = State()
 
@@ -25,18 +24,16 @@ class Base64State(StatesGroup):
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(StartState.active)
-    await message.answer("🤖Hello, welcome to the Security Tools Bot! Enter any available command to do some seurity things!")
-
-
-@router.message()
-async def only_allow_after_start(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state != StartState.active:
-        return
+    await message.answer("🤖Hello, welcome to the Security Tools Bot! Enter any available command to do some security things!")
 
 
 @router.message(Command('base64'))
-async def base64_things(message: Message):
+async def base64_things(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != StartState.active:
+        await message.answer("Please use /start before using commands.")
+        return
+
     await message.answer("Choose an option: ", reply_markup=base64_keyboard)
 
 
@@ -86,3 +83,15 @@ async def handle_decoding(message: Message, state: FSMContext):
     await message.answer("Result: ")
     await message.answer(f"{result}", parse_mode="Markdown")
     await state.clear()
+
+
+@router.message()
+async def fallback(message: Message, state: FSMContext):
+    if message.text and message.text.startswith("/"):
+        return
+
+    current_state = await state.get_state()
+    if current_state != StartState.active:
+        return
+
+    await message.answer("Sorry, I didn't understand that. Try a command.")
