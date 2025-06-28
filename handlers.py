@@ -21,19 +21,27 @@ class Base64State(StatesGroup):
     encoding_type = State()
 
 
+def requires_started():
+    def decorator(handler):
+        async def wrapper(message: Message, state: FSMContext, *args, **_):
+            data = await state.get_data()
+            if not data.get("started"):
+                await message.answer("❗ Please use /start before using commands.")
+                return
+            return await handler(message, state, *args)
+        return wrapper
+    return decorator
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    await state.set_state(StartState.active)
-    await message.answer("🤖Hello, welcome to the Security Tools Bot! Enter any available command to do some security things!")
+    await state.update_data(started=True)
+    await message.answer("🤖 Hello, welcome to the Security Tools Bot!")
 
 
 @router.message(Command('base64'))
+@requires_started()
 async def base64_things(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state != StartState.active:
-        await message.answer("Please use /start before using commands.")
-        return
-
     await message.answer("Choose an option: ", reply_markup=base64_keyboard)
 
 
@@ -72,7 +80,7 @@ async def handle_encoding(message: Message, state: FSMContext):
     result = base64_encode(message.text, encoding)
     await message.answer("Result: ")
     await message.answer(f"{result}", parse_mode="Markdown")
-    await state.clear()
+    await state.set_state(None)
 
 
 @router.message(Base64State.decode_input)
@@ -82,7 +90,7 @@ async def handle_decoding(message: Message, state: FSMContext):
     result = base64_decode(message.text, encoding)
     await message.answer("Result: ")
     await message.answer(f"{result}", parse_mode="Markdown")
-    await state.clear()
+    await state.set_state(None)
 
 
 @router.message()
