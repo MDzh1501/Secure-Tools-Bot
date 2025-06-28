@@ -1,6 +1,5 @@
 import uuid
 
-import uuid
 
 def hash_info_uuid(action: str, namespace=None, name=None, hex=None) -> str:
     if action.endswith("1"):

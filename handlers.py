@@ -4,8 +4,10 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from keyboard import base64_keyboard
+from keyboard import base64_keyboard, uuid_keyboard
 from base64_enc_dec import base64_encode, base64_decode
+from uuid_hash import *
+
 
 
 router = Router()
@@ -19,6 +21,12 @@ class Base64State(StatesGroup):
     encode_input = State()
     decode_input = State()
     encoding_type = State()
+
+
+class UUIDState(StatesGroup):
+    choosing_type = State()
+    entering_name = State()
+    entering_hex = State()
 
 
 def requires_started():
@@ -42,7 +50,13 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(Command('base64'))
 @requires_started()
 async def base64_things(message: Message, state: FSMContext):
-    await message.answer("Choose an option: ", reply_markup=base64_keyboard)
+    await message.answer("Choose an option:", reply_markup=base64_keyboard)
+
+
+@router.message(Command('uuid'))
+@requires_started()
+async def uuid_things(message: Message, state: FSMContext):
+    await message.answer("How do you want to generate an UUID?", reply_markup=uuid_keyboard)
 
 
 @router.callback_query(F.data.startswith("base64:"))
@@ -91,6 +105,48 @@ async def handle_decoding(message: Message, state: FSMContext):
     await message.answer("Result: ")
     await message.answer(f"{result}", parse_mode="Markdown")
     await state.set_state(None)
+
+
+@router.callback_query(F.data.startswith("uuid:"))
+async def uuid_choose(callback: CallbackQuery, state: FSMContext):
+    version = callback.data.split(":")[1]
+    await state.set_data({"version": version})
+    
+    if version == "1" or version == "3":
+        result = hash_info_uuid("uuid:" + version)
+        await callback.message.answer(f"UUID v{version}: `{result}`", parse_mode="Markdown")
+        await state.clear()
+    
+    elif version == "2" or version == "4":
+        await callback.message.answer("Enter a *name* for UUID generation:", parse_mode="Markdown")
+        await state.set_state(UUIDState.entering_name)
+    
+    elif version == "5":
+        await callback.message.answer("Enter a 32-char hex string:", parse_mode="Markdown")
+        await state.set_state(UUIDState.entering_hex)
+    
+    await callback.answer()
+
+
+@router.message(UUIDState.entering_name)
+async def handle_name_input(message: Message, state: FSMContext):
+    data = await state.get_data()
+    version = data.get("version")
+    name = message.text.strip()
+
+    namespace = uuid.NAMESPACE_DNS  
+
+    result = hash_info_uuid(f"uuid:{version}", namespace=namespace, name=name)
+    await message.answer(f"✅ Got your name. UUID v{version} result:\n`{result}`", parse_mode="Markdown")
+    await state.clear()
+
+
+@router.message(UUIDState.entering_hex)
+async def handle_hex_input(message: Message, state: FSMContext):
+    hex_str = message.text.strip()
+    result = hash_info_uuid("uuid:5", hex=hex_str)
+    await message.answer(f"✅ Using your hex input. UUID from hex:\n`{result}`", parse_mode="Markdown")
+    await state.clear()
 
 
 @router.message()
