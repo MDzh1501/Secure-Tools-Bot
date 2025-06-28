@@ -1,4 +1,3 @@
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -41,3 +40,10 @@ uuid_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         )
     ]
 ])
+
+hashing_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="Показати доступні способи хешування", callback_data="hash:guaranteed")
+    ]
+])
+
