@@ -10,7 +10,7 @@ def base64_encode(text: str, encoding: str) -> str:
         return encoded.decode(encoding.lower())
    
     except (UnicodeEncodeError, LookupError):
-        return f"❌ Encoding failed. Unsupported format: {encoding}"
+        return f"❌ Помилка кодування. Непідтримуваний формат: {encoding}"
 
 
 def base64_decode(text: str, encoding: str) -> str:
@@ -21,10 +21,10 @@ def base64_decode(text: str, encoding: str) -> str:
         return decoded.decode(encoding.lower())
     
     except (binascii.Error, ValueError):
-        return "❌ Base64 decoding failed. Input is not valid base64."
+        return "❌ Не вдалося декодувати Base64. Вхідні дані не є допустимими для base64."
     
     except UnicodeDecodeError:
-        return f"❌ Failed to decode bytes to text using '{encoding.lower()}'."
+        return f"❌ Не вдалося декодувати байти в текст за допомогою '{encoding.lower()}'."
     
     except LookupError:
-        return f"❌ Unsupported encoding: {encoding}"
+        return f"❌ Помилка кодування: {encoding}"

@@ -4,16 +4,17 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from keyboard import base64_keyboard, uuid_keyboard, hashing_keyboard
-from base64_enc_dec import base64_encode, base64_decode
-from uuid_hash import *
-from hash_tool import *
+from keyboard import *
+from tools.base64_enc_dec import base64_encode, base64_decode
+from tools.uuid_hash import *
+from tools.hash_tool import *
+from tools.url_service import url_encode, url_decode
 
 
 
 router = Router()
 
-
+# === FSM States ===
 class StartState(StatesGroup):
     active = State()
 
@@ -35,50 +36,80 @@ class HashStates(StatesGroup):
     waiting_info = State()
 
 
+class URLStates(StatesGroup):
+    input_text = State()
+    choosing_encoding = State()
+    safe_features = State()
+
+
+# === Handlers ===
 def requires_started():
     def decorator(handler):
-        async def wrapper(message: Message, state: FSMContext, *args, **_):
+        async def wrapper(*args, **kwargs):
+            # Try to find FSMContext and Message in args or kwargs
+            state = kwargs.get('state')
+            message = kwargs.get('message')
+
+            # If not found in kwargs, try to find in args by type
+            if state is None or message is None:
+                for arg in args:
+                    if isinstance(arg, FSMContext):
+                        state = arg
+                    elif isinstance(arg, Message):
+                        message = arg
+
+            if state is None or message is None:
+                return await handler(*args, **kwargs)
+
             data = await state.get_data()
             if not data.get("started"):
                 await message.answer("❗ Please use /start before using commands.")
                 return
-            return await handler(message, state, *args)
+
+            return await handler(*args, **kwargs)
         return wrapper
     return decorator
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.update_data(started=True)
-    await message.answer("🤖 Hello, welcome to the Security Tools Bot!")
+async def cmd_start(message: Message, state: FSMContext, **kwargs):
+    await state.update_data(started=True)  # <-- set flag in data, not state
+    await message.answer("🤖 Привіт, ласкаво просимо до Security Tools Bot!")
 
-
+# -=-=- Command handlers -=-=-
 @router.message(Command('base64'))
 @requires_started()
-async def base64_start(message: Message, state: FSMContext):
-    await message.answer("Choose an option:", reply_markup=base64_keyboard)
+async def base64_start(message: Message, state: FSMContext, **kwargs):
+    await message.answer("Виберіть варіант:", reply_markup=base64_keyboard)
 
 
 @router.message(Command('uuid'))
 @requires_started()
-async def uuid_start(message: Message, state: FSMContext):
-    await message.answer("How do you want to generate an UUID?", reply_markup=uuid_keyboard)
+async def uuid_start(message: Message, state: FSMContext, **kwargs):
+    await message.answer("Як згенерувати UUID?", reply_markup=uuid_keyboard)
 
 
 @router.message(Command('hash'))
 @requires_started()
-async def hash_start(message: Message, state: FSMContext):
+async def hash_start(message: Message, state: FSMContext, **kwargs):
     await message.answer("Оберіть алгоритм хешування (наприклад, sha256)", reply_markup=hashing_keyboard)
     await state.set_state(HashStates.choosing_algo)
 
 
+@router.message(Command('url'))
+@requires_started()
+async def url_start(message: Message, state: FSMContext, **kwargs):
+    await message.answer("Оберіть вашу дію:", reply_markup=url_choice_keyboard)
+
+
+# -=-=- Query and FSM context handlers -=-=-
 @router.callback_query(F.data.startswith("base64:"))
 async def base64_callback(callback: CallbackQuery, state: FSMContext):
     action = callback.data.split(":")[1]
 
-    await state.set_data({"action": action})
+    await state.update_data(action=action)
 
-    await callback.message.answer("Firstly, what encoding do you want to use? (e.g. utf-8, ascii)")
+    await callback.message.answer("По-перше, яке кодування ви хочете використовувати? (наприклад, utf-8, ascii)")
     await state.set_state(Base64State.encoding_type)
 
     await callback.answer()
@@ -93,10 +124,10 @@ async def receive_encoding_type(message: Message, state: FSMContext):
     await state.update_data(encoding=encoding)
 
     if action == "encode":
-        await message.answer("Now send the text you want to encode.")
+        await message.answer("Тепер надішліть текст, який ви хочете закодувати.")
         await state.set_state(Base64State.encode_input)
     elif action == "decode":
-        await message.answer("Now send the Base64 string you want to decode.")
+        await message.answer("Тепер надішліть рядок Base64, який ви хочете декодувати.")
         await state.set_state(Base64State.decode_input)
 
 
@@ -105,7 +136,7 @@ async def handle_encoding(message: Message, state: FSMContext):
     data = await state.get_data()
     encoding = data.get("encoding", "utf-8")
     result = base64_encode(message.text, encoding)
-    await message.answer("Result: ")
+    await message.answer("Результат: ")
     await message.answer(f"{result}", parse_mode="Markdown")
     await state.set_state(None)
 
@@ -115,7 +146,7 @@ async def handle_decoding(message: Message, state: FSMContext):
     data = await state.get_data()
     encoding = data.get("encoding", "utf-8")
     result = base64_decode(message.text, encoding)
-    await message.answer("Result: ")
+    await message.answer("Результат: ")
     await message.answer(f"{result}", parse_mode="Markdown")
     await state.set_state(None)
 
@@ -183,7 +214,7 @@ async def choose_algo(message: Message, state: FSMContext):
 
 
 @router.message(HashStates.waiting_info, F.text)
-async def handle_text(message: Message, state: FSMContext):
+async def handle_hash_text(message: Message, state: FSMContext):
     data = await state.get_data()
     algo = data.get("chosen_algo", "sha256")
 
@@ -198,7 +229,6 @@ async def handle_file_photo(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     algo = data.get("chosen_algo", "sha256")
 
-    # Завантаження файлу (фото або документ)
     if message.photo:
         file = message.photo[-1]
     else:
@@ -215,6 +245,129 @@ async def handle_file_photo(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(None)
 
 
+@router.callback_query(F.data.in_({"url:encode", "url:decode"}))
+async def handle_url_action_start(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split(":")[1]
+    await state.update_data(action=action, plus_included=False, safety="", encoding=None, text=None)
+    await callback.message.answer("Надішліть ваш текст (повинен бути звичайним, байтовим чи вже зашифрованим)")
+    await state.set_state(URLStates.input_text)
+    await callback.answer()
+
+
+@router.message(URLStates.input_text)
+async def handle_url_input_text(message: Message, state: FSMContext):
+    data = await state.get_data()
+    action = data.get("action")
+    text = message.text.strip()
+
+    await state.update_data(text=text)
+
+    if action == "encode":
+        await message.answer("✅ Текст був отриман! Що хочете зробити далі? ", reply_markup=url_encoding_keyboard)
+        await state.set_state(None)
+    elif action == "decode":
+        await message.answer("✏️ Тепер введіть тип кодування (наприклад, utf-8, ascii):")
+        await state.set_state(URLStates.choosing_encoding)
+
+
+@router.callback_query(F.data == "url:encoding")
+async def handle_url_enc_type(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    text = data.get("text")
+
+    if not isinstance(text, str):
+        await callback.message.answer("❗ Неможливо обрати тип кодування — ваш ввід не є текстовим рядком.")
+        await callback.answer()
+        return
+
+    await callback.message.answer("✏️ Введіть тип кодування (наприклад, utf-8, ascii, cp1251):")
+    await state.set_state(URLStates.choosing_encoding)
+
+    await callback.answer()
+
+
+@router.message(URLStates.choosing_encoding)
+async def handle_typed_encoding(message: Message, state: FSMContext):
+    data = await state.get_data()
+    action = data.get("action")
+    text = data.get("text")
+    encoding = message.text.strip().lower()
+
+    # Перевірка валідності кодування
+    try:
+        ''.encode(encoding)
+    except LookupError:
+        await message.answer("❌ Тип кодування не підтримується. Спробуйте інший (наприклад, utf-8 або ascii).")
+        return
+
+    await state.update_data(encoding=encoding)
+
+    if action == "encode":
+        await message.answer(
+            "✅ Тип кодування збережено. Що робити далі?",
+            reply_markup=url_encoding_keyboard
+        )
+        await state.set_state(None)  # Якщо хочеш вийти зі стану, або на твій розсуд
+    elif action == "decode":
+        result = url_decode(text, encoding)
+        await message.answer(f"🔐 Результат: {result}")
+        await state.set_state(None)
+
+
+@router.callback_query(F.data == "url:plus_included")
+async def include_plus(callback: CallbackQuery, state: FSMContext):
+    __plus_included = True
+    await state.update_data(plus_included=__plus_included)
+    await callback.message.answer("✅ Буде заміна пробілів на +! Що далі? ", reply_markup=url_encoding_keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "url:safe")
+async def include_safety_features(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введіть символи, які не будуть закодовані: ")
+    await state.set_state(URLStates.safe_features)
+    await callback.answer()
+
+
+@router.message(URLStates.safe_features)
+async def handle_safety_features(message: Message, state: FSMContext):
+    safety_input = message.text.strip()
+    safety = safety_input.replace(" ", '')
+
+    await state.update_data(safety=safety)
+    await message.answer("✅ Символи збережено! Що далі?", reply_markup=url_encoding_keyboard)
+    await state.set_state(None)  # Або залишай, якщо хочеш чекати наступні дії
+
+
+@router.callback_query(F.data == "url:proceed_encode")
+async def proceed_url_encoding(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    text = data.get("text")
+    encoding = data.get("encoding", "utf-8")
+    safety = data.get("safety", "")
+    plus_included = data.get("plus_included", False)
+
+    if not isinstance(text, str):
+        await callback.message.answer("❌ Текст має бути рядком. Спробуйте ще раз.")
+        await callback.answer()
+        return
+
+    try:
+        result = url_encode(
+            text=text,
+            encoding=encoding,
+            safety_features=safety,
+            parse_plus=plus_included
+        )
+        await callback.message.answer(f"🔐 Результат кодування:\n`{result}`", parse_mode="Markdown")
+    except Exception as e:
+        await callback.message.answer(f"❌ Помилка при кодуванні:\n{str(e)}")
+
+    await state.set_state(None)
+    await state.update_data(plus_included=False, safety="", encoding=None, text=None, action=None)
+    await callback.answer()
+
+
 @router.message()
 async def fallback(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
@@ -224,4 +377,4 @@ async def fallback(message: Message, state: FSMContext):
     if not data.get("started"):
         return
 
-    await message.answer("Sorry, I didn't understand that. Try a command.")
+    await message.answer("Вибачте, я не зрозумів цього. Спробуй команду.")
