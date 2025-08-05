@@ -1,0 +1,7 @@
+[
+    {
+        "algorithm": "SHA256",
+        "iterations": 1200000,
+        "length": 32
+    }
+]
