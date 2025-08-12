@@ -68,4 +68,3 @@ url_encoding_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="✅ Перейти далі", callback_data="url:proceed_encode")
     ]
 ])
-

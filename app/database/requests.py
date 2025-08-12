@@ -57,37 +57,69 @@ class DBRequestsHandler:
             salt=encrypted["salt"],
             description=description
         )
-
-    async def get_decrypted_passwords(self, tg_id: int):
-        """Fetch and decrypt all stored passwords for a user."""
-        password_entries = await self.get_passwords(tg_id)
-
-        if not password_entries:
-            return
-
-        decrypted_passwords = []
-
-        for entry in password_entries:
-            decrypted = decrypt_pwd(entry.encrypted_pwd, entry.salt)
-            decrypted_passwords.append({
-                "description": entry.description,
-                "password": decrypted
-            })
-
-        return decrypted_passwords
-
+    
     @connection
-    async def get_passwords(self, tg_id: int, session: AsyncSession):
+    async def delete_password(self, tg_id: int, pwd_id: int, session: AsyncSession):
+        """Delete a specific password belonging to a user by password id."""
         user = await self._get_user(tg_id, session=session)
         if not user:
             return None
 
-        stmt = select(Password).filter(Password.user_id == user.id)
+        stmt = select(Password).where(
+            Password.id == pwd_id,
+            Password.user_id == user.id
+        )
         result = await session.execute(stmt)
-        return result.scalars().all()
-                
+        password_entry = result.scalar_one_or_none()
+
+        if not password_entry:
+            return False
+
+        await session.delete(password_entry)
+        await session.commit()
+        return True
+    
+    # @connection
+    # async def update_password(self, tg_id: int, session: AsyncSession):
+    #     """Delete password, created by the user user"""
+    #     user = await self._get_user(tg_id, session=session)
+    #     if not user:
+    #         return None
+        
+    #     if user.password:
+    #         await session.delete(user.password)
+    #         await session.commit()
+    #         return True
+
+    #     return False
+    
+    @connection
+    async def get_decrypted_password_selection_map(self, tg_id: int, session: AsyncSession):
+        user = await self._get_user(tg_id, session=session)
+        if not user:
+            return {}
+
+        stmt = select(Password).where(Password.user_id == user.id)
+        result = await session.execute(stmt)
+        passwords = result.scalars().all()
+
+        selection_map = {}
+
+        for i, pwd_entry in enumerate(passwords, start=1):
+            try:
+                decrypted = decrypt_pwd(pwd_entry.encrypted_pwd, pwd_entry.salt)
+            except Exception:
+                decrypted = "[decryption failed]"
+
+            selection_map[i] = {
+                "id": pwd_entry.id,
+                "description": pwd_entry.description,
+                "password": decrypted
+            }
+
+        return selection_map
+        
     async def _get_user(self, tg_id: int, session: AsyncSession):
         query = select(User).filter(User.tg_id == tg_id)
         result = await session.execute(query)
         return result.scalar_one_or_none()
-    

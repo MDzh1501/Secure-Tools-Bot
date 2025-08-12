@@ -4,6 +4,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
+
 from keyboard import *
 from tools.base64_enc_dec import base64_encode, base64_decode
 from tools.uuid_hash import *
@@ -12,6 +13,8 @@ from tools.url_service import url_encode, url_decode
 from app.database.requests import DBRequestsHandler
 from middleware_class import UserInitMiddleware
 import re
+import aiofiles
+import json
 
 
 router = Router()
@@ -51,18 +54,35 @@ class PasswordStates(StatesGroup):
     description = State()
 
 
+class DeletePasswordState(StatesGroup):
+    waiting_for_password_number = State()
+
+
 # === Handlers ===
-def escape_md(text: str) -> str:
+def escape_md_v2(text: str) -> str:
     # Escape spec. symbols for MarkdownV2
-    escape_chars = r'_*[]()~`>#+-=|{}.!\\'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+    return re.sub(r"([_*\[\]()~`>#+\-=|{}.!\\])", r"\\\1", text)
 
 
-@router.message(Command('start'))
+@router.message(CommandStart())
 async def bot_start(message: Message, **kwargs):
-    await message.answer("🤖 Привіт! Я Security Bot! Введіть команду для роботи зі мною!")
+    await message.answer("🤖 Привіт! Я Security Bot! Введіть команду для роботи зі мною! Рекомендую спочатку ввести /help команду для ознайомлення!")
 
 
+@router.message(Command('help'))
+async def give_help(message: Message, **kwargs):
+    data = list()
+
+    async with aiofiles.open("commands.json", "r", encoding='utf-8') as json_file:
+        contents = await json_file.read()
+        commands: dict = json.loads(contents)
+        for cmd, desc in commands.items():
+            data.append(f"⏩ {escape_md_v2(cmd)}: {escape_md_v2(desc)}")
+    
+    text = f"🆘 *Усі необхідні команди для роботи з ботом*\n\n" + "\n".join(data)
+    await message.answer(text, parse_mode="MarkdownV2")
+
+    
 @router.message(Command('base64'))
 async def base64_start(message: Message, state: FSMContext, **kwargs):
     await message.answer("Виберіть варіант:", reply_markup=base64_keyboard)
@@ -92,49 +112,42 @@ async def pwd_start(message: Message, state: FSMContext, **kwargs):
 
 @router.message(Command("show_passwords"))
 async def show_pwd(message: Message, **kwargs):
-    decrypted_passwords = await db_manager.get_decrypted_passwords(message.from_user.id)
-    if not decrypted_passwords:
+    selection_map = await db_manager.get_decrypted_password_selection_map(message.from_user.id)
+    if not selection_map:
         await message.answer("У вас ще немає збережених паролів.")
         return
 
     lines = []
-    for entry in decrypted_passwords:
-        description = escape_md(entry["description"])
-        password = escape_md(entry["password"])
-        lines.append(f"🔹 *{description}*: ||{password}||")
+    for index, entry in selection_map.items():
+        description = escape_md_v2(entry["description"])
+        password = escape_md_v2(entry["password"])
+        lines.append(f"{index}. 🔹 *{description}*: ||{password}||")
 
     text = "🔑 *Усі ваші збережені паролі:*\n\n" + "\n".join(lines)
 
     await message.answer(text, parse_mode="MarkdownV2")
 
 
-@router.message(PasswordStates.password)
-async def handle_password(message: Message, state: FSMContext):
-    user_password = message.text
-    if not user_password or not user_password.strip():
-        await message.answer("Це поле не може бути порожнім. Спробуйте ще раз.")
+@router.message(Command("delete_password"))
+async def delete_pwd(message: Message, state: FSMContext, **kwargs):
+    selection_map = await db_manager.get_decrypted_password_selection_map(message.from_user.id)
+    
+    if not selection_map:
+        await message.answer("У вас ще немає збережених паролів.")
         return
 
-    await state.update_data(password=user_password.strip())
-    await state.set_state(PasswordStates.description)
-    await message.answer("Тепер введіть опис (наприклад: Gmail, Discord тощо):")
+    await state.update_data(selection_map=selection_map)
 
+    lines = []
+    for index, entry in selection_map.items():
+        description = escape_md_v2(entry["description"])
+        password = escape_md_v2(entry["password"])
+        lines.append(rf"{index}\. 🔹 *{description}*: ||{password}||")
 
-@router.message(PasswordStates.description)
-async def handle_desc(message: Message, state: FSMContext):
-    user_data = await state.get_data()
-    description = message.text
-    if not description or not description.strip():
-        await message.answer("Це поле не може бути порожнім. Спробуйте ще раз.")
-        return
+    text = "🔑 *Оберіть номер пароля, який бажаєте видалити:*\n\n" + "\n".join(lines)
+    await message.answer(text, parse_mode="MarkdownV2")
 
-    password = user_data.get("password")
-
-    await db_manager.store_user_password(message.from_user.id, password, description.strip())
-
-    await message.answer("🔐 Пароль збережено.")
-    await state.clear()
-
+    await state.set_state(DeletePasswordState.waiting_for_password_number)
 
 # -=-=- Query and FSM context handlers -=-=-
 @router.callback_query(F.data.startswith("base64:"))
@@ -428,6 +441,31 @@ async def handle_desc(message: Message, state: FSMContext):
     await message.answer("🔐 Пароль збережено.")
     await state.clear()
 
+
+@router.message(DeletePasswordState.waiting_for_password_number)
+async def process_password_deletion(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selection_map = data.get("selection_map")
+
+    try:
+        selected_index = int(message.text.strip())
+    except ValueError:
+        await message.answer("Будь ласка, введіть число.")
+        return
+
+    if selected_index not in selection_map:
+        await message.answer("Неправильний номер. Спробуйте ще раз.")
+        return
+
+    pwd_id = selection_map[selected_index]["id"]
+    success = await db_manager.delete_password(message.from_user.id, pwd_id)
+
+    if success:
+        await message.answer("✅ Пароль було успішно видалено.")
+    else:
+        await message.answer("⚠️ Не вдалося видалити пароль.")
+
+    await state.clear()
 
 
 @router.message()
