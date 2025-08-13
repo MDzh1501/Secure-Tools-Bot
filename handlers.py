@@ -1,20 +1,25 @@
 from aiogram import F, Router, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-
 
 from keyboard import *
 from tools.base64_enc_dec import base64_encode, base64_decode
 from tools.uuid_hash import *
 from tools.hash_tool import *
 from tools.url_service import url_encode, url_decode
+from tools.generate_pwd import generate_password
 from app.database.requests import DBRequestsHandler
 from middleware_class import UserInitMiddleware
+
 import re
 import aiofiles
 import json
+import uuid 
+import hashlib
+import os
+
 
 
 router = Router()
@@ -26,13 +31,13 @@ class StartState(StatesGroup):
     active = State()
 
 
-class Base64State(StatesGroup):
+class Base64States(StatesGroup):
     encode_input = State()
     decode_input = State()
     encoding_type = State()
 
 
-class UUIDState(StatesGroup):
+class UUIDStates(StatesGroup):
     choosing_type = State()
     entering_name = State()
     entering_hex = State()
@@ -54,8 +59,19 @@ class PasswordStates(StatesGroup):
     description = State()
 
 
+class GeneratedPasswordStates(StatesGroup):
+    length = State()
+    description = State()
+
+
 class DeletePasswordState(StatesGroup):
     waiting_for_password_number = State()
+
+
+class UpdatePasswordStates(StatesGroup):
+    waiting_for_number = State()
+    waiting_for_new_password = State()
+    waiting_for_new_description = State()
 
 
 # === Handlers ===
@@ -65,7 +81,8 @@ def escape_md_v2(text: str) -> str:
 
 
 @router.message(CommandStart())
-async def bot_start(message: Message, **kwargs):
+async def bot_start(message: Message, state: FSMContext, **kwargs):
+    await state.update_data(started=True)
     await message.answer("🤖 Привіт! Я Security Bot! Введіть команду для роботи зі мною! Рекомендую спочатку ввести /help команду для ознайомлення!")
 
 
@@ -110,6 +127,12 @@ async def pwd_start(message: Message, state: FSMContext, **kwargs):
     await state.set_state(PasswordStates.password)
 
 
+@router.message(Command("generate_password"))
+async def generate_pwd(message: Message, state: FSMContext, **kwargs):
+    await message.answer("Спершу введіть бажану довжину паролю для генерації (к-сть символів)")
+    await state.set_state(GeneratedPasswordStates.length)
+
+
 @router.message(Command("show_passwords"))
 async def show_pwd(message: Message, **kwargs):
     selection_map = await db_manager.get_decrypted_password_selection_map(message.from_user.id)
@@ -121,7 +144,7 @@ async def show_pwd(message: Message, **kwargs):
     for index, entry in selection_map.items():
         description = escape_md_v2(entry["description"])
         password = escape_md_v2(entry["password"])
-        lines.append(f"{index}. 🔹 *{description}*: ||{password}||")
+        lines.append(rf"{index}\. 🔹 *{description}*: ||{password}||")
 
     text = "🔑 *Усі ваші збережені паролі:*\n\n" + "\n".join(lines)
 
@@ -149,6 +172,28 @@ async def delete_pwd(message: Message, state: FSMContext, **kwargs):
 
     await state.set_state(DeletePasswordState.waiting_for_password_number)
 
+
+@router.message(Command("update_password"))
+async def update_pwd(message: Message, state: FSMContext):
+    selection_map = await db_manager.get_decrypted_password_selection_map(message.from_user.id)
+    
+    if not selection_map:
+        await message.answer("У вас ще немає збережених паролів.")
+        return
+
+    await state.update_data(selection_map=selection_map)
+
+    lines = []
+    for index, entry in selection_map.items():
+        description = escape_md_v2(entry["description"])
+        password = escape_md_v2(entry["password"])
+        lines.append(rf"{index}\. 🔹 *{description}*: ||{password}||")
+
+    text = "🔑 *Оберіть номер пароля, який бажаєте оновити:*\n\n" + "\n".join(lines)
+    await message.answer(text, parse_mode="MarkdownV2")
+
+    await state.set_state(UpdatePasswordStates.waiting_for_number)
+
 # -=-=- Query and FSM context handlers -=-=-
 @router.callback_query(F.data.startswith("base64:"))
 async def base64_callback(callback: CallbackQuery, state: FSMContext):
@@ -157,12 +202,12 @@ async def base64_callback(callback: CallbackQuery, state: FSMContext):
     await state.update_data(action=action)
 
     await callback.message.answer("По-перше, яке кодування ви хочете використовувати? (наприклад, utf-8, ascii)")
-    await state.set_state(Base64State.encoding_type)
+    await state.set_state(Base64States.encoding_type)
 
     await callback.answer()
 
 
-@router.message(Base64State.encoding_type)
+@router.message(Base64States.encoding_type)
 async def receive_encoding_type(message: Message, state: FSMContext):
     encoding = message.text.strip().lower()
     data = await state.get_data()
@@ -172,13 +217,13 @@ async def receive_encoding_type(message: Message, state: FSMContext):
 
     if action == "encode":
         await message.answer("Тепер надішліть текст, який ви хочете закодувати.")
-        await state.set_state(Base64State.encode_input)
+        await state.set_state(Base64States.encode_input)
     elif action == "decode":
         await message.answer("Тепер надішліть рядок Base64, який ви хочете декодувати.")
-        await state.set_state(Base64State.decode_input)
+        await state.set_state(Base64States.decode_input)
 
 
-@router.message(Base64State.encode_input)
+@router.message(Base64States.encode_input)
 async def handle_encoding(message: Message, state: FSMContext):
     data = await state.get_data()
     encoding = data.get("encoding", "utf-8")
@@ -188,7 +233,7 @@ async def handle_encoding(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.message(Base64State.decode_input)
+@router.message(Base64States.decode_input)
 async def handle_decoding(message: Message, state: FSMContext):
     data = await state.get_data()
     encoding = data.get("encoding", "utf-8")
@@ -208,18 +253,18 @@ async def uuid_choose(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(f"UUID v{version}: `{result}`", parse_mode="Markdown")
         await state.clear()
     
-    elif version == "2" or version == "4":
+    elif version == "4":
         await callback.message.answer("Введіть *ім'я* для генерації UUID:", parse_mode="Markdown")
-        await state.set_state(UUIDState.entering_name)
+        await state.set_state(UUIDStates.entering_name)
     
     elif version == "5":
         await callback.message.answer("Введіть 32-х символьний шістнадцятковий рядок:", parse_mode="Markdown")
-        await state.set_state(UUIDState.entering_hex)
+        await state.set_state(UUIDStates.entering_hex)
     
     await callback.answer()
 
 
-@router.message(UUIDState.entering_name)
+@router.message(UUIDStates.entering_name)
 async def handle_name_input(message: Message, state: FSMContext):
     data = await state.get_data()
     version = data.get("version")
@@ -232,7 +277,7 @@ async def handle_name_input(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.message(UUIDState.entering_hex)
+@router.message(UUIDStates.entering_hex)
 async def handle_hex_input(message: Message, state: FSMContext):
     hex_str = message.text.strip()
     result = hash_info_uuid("uuid:5", hex=hex_str)
@@ -289,6 +334,12 @@ async def handle_file_photo(message: Message, state: FSMContext, bot: Bot):
     result = hash_file(file_path, algo)
 
     await message.answer(f"🔑 Хеш файлу:\n{result}")
+
+    try:
+        os.remove(file_path)
+    except Exception:
+        pass
+
     await state.clear()
 
 
@@ -442,6 +493,44 @@ async def handle_desc(message: Message, state: FSMContext):
     await state.clear()
 
 
+@router.message(GeneratedPasswordStates.length)
+async def get_len_and_generate(message: Message, state: FSMContext, **kwargs):
+    try:
+        length = int(message.text.strip())
+        if length < 8:
+            await message.answer("Довжина паролю повинна бути не менше 8 символів. Спробуйте ще раз.")
+            return
+        if length > 128:
+            await message.answer("Довжина паролю надто велика. Максимум 128 символів.")
+            return
+    except ValueError:
+        await message.answer("Будь ласка, введіть ціле число для довжини паролю.")
+        return
+
+    pwd = generate_password(length)
+    await state.update_data(generated_password=pwd)
+
+    escaped_pwd = escape_md_v2(pwd)
+
+    await message.answer(f"Згенерований пароль:\n{pwd}\n\nБудь ласка, введіть опис для цього пароля (наприклад: Gmail, Discord):")
+    await state.set_state(GeneratedPasswordStates.description)
+
+
+@router.message(GeneratedPasswordStates.description)
+async def handle_generated_password_description(message: Message, state: FSMContext):
+    data = await state.get_data()
+    password = data.get("generated_password")
+    description = message.text.strip()
+
+    if not description:
+        await message.answer("Опис не може бути порожнім. Спробуйте ще раз.")
+        return
+
+    await db_manager.store_user_password(message.from_user.id, password, description)
+    await message.answer("🔐 Згенерований пароль збережено.")
+    await state.clear()
+
+
 @router.message(DeletePasswordState.waiting_for_password_number)
 async def process_password_deletion(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -464,6 +553,62 @@ async def process_password_deletion(message: Message, state: FSMContext):
         await message.answer("✅ Пароль було успішно видалено.")
     else:
         await message.answer("⚠️ Не вдалося видалити пароль.")
+
+    await state.clear()
+
+
+@router.message(UpdatePasswordStates.waiting_for_number)
+async def choose_password_number(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selection_map = data.get("selection_map")
+
+    try:
+       selected_index = int(message.text.strip())
+    except ValueError:
+        await message.answer("Будь ласка, введіть число.")
+        return
+
+    if selected_index not in selection_map:
+        await message.answer("Неправильний номер. Спробуйте ще раз.")
+        return
+
+    pwd_id = selection_map[selected_index]["id"]
+    await state.update_data(pwd_id=pwd_id)
+
+    await message.answer("Введіть новий пароль або натисніть 'Пропустити', щоб залишити старий:", reply_markup=skip_keyboard)
+    await state.set_state(UpdatePasswordStates.waiting_for_new_password)
+
+
+@router.message(UpdatePasswordStates.waiting_for_new_password)
+async def get_new_password(message: Message, state: FSMContext):
+    if message.text.strip().lower() != "пропустити":
+        await state.update_data(new_pwd=message.text.strip())
+    else:
+        await state.update_data(new_pwd=None)
+
+    await message.answer("Введіть новий опис або натисніть 'Пропустити', щоб залишити старий:", reply_markup=skip_keyboard)
+    await state.set_state(UpdatePasswordStates.waiting_for_new_description)
+        
+
+@router.message(UpdatePasswordStates.waiting_for_new_description)
+async def get_new_description(message: Message, state: FSMContext):
+    if message.text.strip().lower() != "пропустити":
+        await state.update_data(new_description=message.text.strip())
+    else:
+        await state.update_data(new_description=None)
+
+    data = await state.get_data()
+    result = await db_manager.update_password(
+        tg_id=message.from_user.id,
+        pwd_id=data["pwd_id"],
+        new_pwd=data.get("new_pwd"),
+        new_description=data.get("new_description")
+    )
+
+    if result:
+        await message.answer("✅ Пароль успішно оновлено.", reply_markup=ReplyKeyboardRemove())
+    else:
+        await message.answer("⚠️ Не вдалося оновити пароль.")
 
     await state.clear()
 

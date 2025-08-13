@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
 
 base64_keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -68,3 +68,6 @@ url_encoding_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="✅ Перейти далі", callback_data="url:proceed_encode")
     ]
 ])
+
+skip_keyboard = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустити")], ], resize_keyboard=True, one_time_keyboard=True
+)

@@ -17,12 +17,10 @@ class UserInitMiddleware(BaseMiddleware):
         db = DBRequestsHandler()
 
         if state is None or db is None:
-            # Якщо немає контексту FSM або DB - просто викликаємо хендлер
             return await handler(event, data)
 
         data_state = await state.get_data()
         if not data_state.get("started"):
-            # Ініціалізуємо користувача
             try:
                 await db.add_user(event.from_user.id)
                 await state.update_data(started=True)

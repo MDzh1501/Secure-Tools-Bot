@@ -79,20 +79,40 @@ class DBRequestsHandler:
         await session.commit()
         return True
     
-    # @connection
-    # async def update_password(self, tg_id: int, session: AsyncSession):
-    #     """Delete password, created by the user user"""
-    #     user = await self._get_user(tg_id, session=session)
-    #     if not user:
-    #         return None
-        
-    #     if user.password:
-    #         await session.delete(user.password)
-    #         await session.commit()
-    #         return True
+    @connection
+    async def update_password(self, tg_id: int, pwd_id: int, new_pwd: str | None, new_description: str | None, session: AsyncSession):
+        """Update a specific password's value and/or description for a user."""
+        user = await self._get_user(tg_id, session=session)
+        if not user:
+            return None
 
-    #     return False
-    
+        stmt = select(Password).where(
+            Password.id == pwd_id,
+            Password.user_id == user.id
+        )
+        result = await session.execute(stmt)
+        password_entry = result.scalar_one_or_none()
+
+        if not password_entry:
+            return False
+
+        updated = False
+
+        if new_pwd is not None:
+            encrypted = encrypt_pwd(new_pwd)
+            password_entry.encrypted_pwd = encrypted["encrypted"]
+            password_entry.salt = encrypted["salt"]
+            updated = True
+
+        if new_description is not None:
+            password_entry.description = new_description
+            updated = True
+
+        if updated:
+            await session.commit()
+
+        return updated
+
     @connection
     async def get_decrypted_password_selection_map(self, tg_id: int, session: AsyncSession):
         user = await self._get_user(tg_id, session=session)
